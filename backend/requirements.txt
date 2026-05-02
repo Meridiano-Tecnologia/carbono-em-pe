@@ -1,0 +1,63 @@
+# ==========================================
+# CARBONO EM PÉ — DEPENDÊNCIAS BACKEND
+# ==========================================
+
+# Framework web
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+gunicorn==23.0.0
+
+# Segurança e autenticação
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
+cryptography==43.0.1
+
+# Banco de dados
+supabase==2.7.4
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.35
+
+# Validação e configuração
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# Google Earth Engine
+earthengine-api==0.1.414
+
+# Geoespacial
+geopandas==1.0.1
+shapely==2.0.6
+pyproj==3.6.1
+rasterio==1.3.11
+fiona==1.10.1
+
+# Processamento de arquivos
+aiofiles==24.1.0
+python-multipart==0.0.9
+
+# Geração de PDF
+weasyprint==62.3
+
+# Pagamentos
+stripe==10.12.0
+
+# E-mail
+fastapi-mail==1.4.1
+
+# Filas e tarefas assíncronas
+celery==5.4.0
+redis==5.1.1
+
+# Segurança HTTP
+slowapi==0.1.9
+secure==0.3.0
+
+# Logging e monitoramento
+loguru==0.7.2
+
+# Testes
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2

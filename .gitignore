@@ -1,0 +1,40 @@
+# Variáveis de ambiente e segredos
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+*.local
+
+# Sistema
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+
+# Certificados e chaves
+certificates/
+*.cert
+*.crt
+
+# Supabase
+.supabase/
