@@ -4,7 +4,8 @@ Equações de Chave et al. 2005 (Global Ecology and Biogeography 14:677-688).
 Pontuação de elegibilidade em quatro dimensões para mercado voluntário de carbono.
 """
 import math
-from datetime import datetime, timezone
+import traceback
+from uuid import UUID
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -144,6 +145,10 @@ class EntradaCamada2(BaseModel):
         gt=0,
         le=50_000_000,
         description="Área total da propriedade em hectares (não apenas a vegetação)",
+    )
+    propriedade_id: UUID | None = Field(
+        default=None,
+        description="UUID da propriedade na tabela propriedades. Se informado, o resultado é salvo em analises.",
     )
 
     @field_validator("area_hectares", "tamanho_propriedade_ha")
@@ -376,30 +381,25 @@ def _calcular_elegibilidade(entrada: EntradaCamada2) -> ElegibilidadeCamada2:
 def _persistir_analise(entrada: EntradaCamada2, resultado: ResultadoCamada2) -> str | None:
     """
     Salva o resultado na tabela `analises` do Supabase.
-    Retorna o id gerado pelo banco, ou None em caso de falha não crítica.
+    Só executa se `entrada.propriedade_id` for informado.
+    Retorna o id gerado pelo banco, ou None se a persistência for pulada ou falhar.
     """
+    if entrada.propriedade_id is None:
+        return None
+
     registro = {
-        "metodo": "camada2",
-        "bioma": entrada.bioma.value,
-        "tipo_vegetacao": entrada.tipo_vegetacao.value,
-        "area_hectares": entrada.area_hectares,
-        "idade_anos": entrada.idade_anos,
-        "presenca_reserva_legal": entrada.presenca_reserva_legal,
-        "app_regularizada": entrada.app_regularizada,
-        "historico_desmatamento": entrada.historico_desmatamento.value,
-        "tamanho_propriedade_ha": entrada.tamanho_propriedade_ha,
-        "biomassa_aerea_mg_ha": resultado.biomassa_aerea_mg_ha,
-        "biomassa_subterranea_mg_ha": resultado.biomassa_subterranea_mg_ha,
-        "biomassa_total_mg": resultado.biomassa_total_mg,
-        "carbono_total_mg": resultado.carbono_total_mg,
-        "co2_equivalente_t": resultado.co2_equivalente_t,
-        "elegibilidade_adicionalidade": resultado.elegibilidade.adicionalidade.pontuacao,
-        "elegibilidade_permanencia": resultado.elegibilidade.permanencia.pontuacao,
-        "elegibilidade_titularidade": resultado.elegibilidade.titularidade.pontuacao,
-        "elegibilidade_tamanho": resultado.elegibilidade.tamanho.pontuacao,
-        "elegibilidade_pontuacao_total": resultado.elegibilidade.pontuacao_total,
-        "elegibilidade_classificacao": resultado.elegibilidade.classificacao,
-        "criado_em": datetime.now(timezone.utc).isoformat(),
+        "propriedade_id":    str(entrada.propriedade_id),
+        "camada":            2,
+        "status":            "concluido",
+        "tco2_estimado":     resultado.co2_equivalente_t,
+        "biomassa_tha":      resultado.biomassa_total_mg / entrada.area_hectares,
+        "score_adicionalidade": resultado.elegibilidade.adicionalidade.pontuacao,
+        "score_permanencia":    resultado.elegibilidade.permanencia.pontuacao,
+        "score_titularidade":   resultado.elegibilidade.titularidade.pontuacao,
+        "score_tamanho":        resultado.elegibilidade.tamanho.pontuacao,
+        "elegibilidade":        resultado.elegibilidade.classificacao,
+        "metodo_calculo":    "chave_2005",
+        "versao_algoritmo":  "1.0.0",
     }
 
     try:
@@ -407,10 +407,16 @@ def _persistir_analise(entrada: EntradaCamada2, resultado: ResultadoCamada2) -> 
         dados = resposta.data
         if dados and len(dados) > 0:
             id_gerado = str(dados[0].get("id", ""))
-            logger.info(f"Análise camada 2 salva — id={id_gerado}")
+            logger.info(f"Análise camada 2 salva — id={id_gerado} | propriedade_id={entrada.propriedade_id}")
             return id_gerado
+        logger.warning(
+            f"Inserção na tabela analises não retornou dados | propriedade_id={entrada.propriedade_id}"
+        )
     except Exception as erro:
-        logger.error(f"Falha ao persistir análise camada 2: {erro}")
+        logger.error(
+            f"Falha ao persistir análise camada 2 | propriedade_id={entrada.propriedade_id}\n"
+            f"{traceback.format_exc()}"
+        )
 
     return None
 
