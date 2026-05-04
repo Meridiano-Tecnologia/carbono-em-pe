@@ -11,6 +11,7 @@ from app.api.rotas_estimativa_camada2 import roteador as roteador_estimativa_cam
 from app.api.rotas_saude import roteador as roteador_saude
 from app.api.rotas_usuarios import roteador as roteador_usuarios
 from app.api.rotas_auth import roteador as roteador_auth
+from app.api.rotas_pagamento import roteador as roteador_pagamento
 from loguru import logger
 import sys
 
@@ -52,6 +53,7 @@ app.include_router(roteador_estimativa_camada2)
 app.include_router(roteador_saude)
 app.include_router(roteador_usuarios)
 app.include_router(roteador_auth)
+app.include_router(roteador_pagamento)
 
 
 @app.on_event("startup")
