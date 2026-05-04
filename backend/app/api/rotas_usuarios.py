@@ -1,6 +1,7 @@
 """
 Carbono em Pé — Rotas de cadastro de usuários e propriedades
 """
+import re
 import traceback
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
@@ -9,6 +10,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from enum import Enum
 from loguru import logger
 from app.core.database import supabase
+from app.core.security import hash_senha
 
 
 roteador = APIRouter(prefix="/usuarios", tags=["Usuários"])
@@ -43,12 +45,28 @@ class TipoVegetacao(str, Enum):
 class EntradaCadastroUsuario(BaseModel):
     nome: str = Field(..., min_length=2, max_length=200, description="Nome completo do usuário")
     email: EmailStr = Field(..., description="Endereço de e-mail — deve ser único")
+    senha: str = Field(
+        ...,
+        min_length=8,
+        description="Senha com mínimo de 8 caracteres, uma maiúscula, uma minúscula e um número",
+    )
     telefone: str | None = Field(
         default=None,
         min_length=8,
         max_length=20,
         description="Telefone com DDD, somente dígitos (opcional)",
     )
+
+    @field_validator("senha")
+    @classmethod
+    def validar_senha(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("A senha deve conter ao menos uma letra maiúscula.")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("A senha deve conter ao menos uma letra minúscula.")
+        if not re.search(r"\d", v):
+            raise ValueError("A senha deve conter ao menos um número.")
+        return v
 
     @field_validator("telefone")
     @classmethod
@@ -145,12 +163,15 @@ async def cadastrar_usuario(entrada: EntradaCadastroUsuario) -> JSONResponse:
                 detail=f"Já existe um usuário cadastrado com o e-mail '{entrada.email}'.",
             )
 
+        senha_hash = hash_senha(entrada.senha)
+
         novo = (
             supabase.table("usuarios")
             .insert({
                 "nome": entrada.nome,
                 "email": entrada.email,
                 "telefone": entrada.telefone,
+                "senha_hash": senha_hash,
             })
             .execute()
         )
