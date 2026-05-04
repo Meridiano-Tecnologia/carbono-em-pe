@@ -2,6 +2,7 @@
 Carbono em Pé — Rotas de pagamento
 Integração Stripe: criação de sessão, webhook e consulta de status.
 """
+import asyncio
 import traceback
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,6 +12,7 @@ from loguru import logger
 from app.core.config import settings
 from app.core.database import supabase
 from app.core.security import usuario_autenticado
+from app.services.gerador_pdf import gerar_relatorio_pdf
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -259,7 +261,7 @@ async def webhook_stripe(request: Request) -> JSONResponse:
                 f"Pagamento confirmado via webhook | session_id={session_id} | analise_id={analise_id}"
             )
 
-            _disparar_geracao_relatorio(analise_id)
+            await _disparar_geracao_relatorio(analise_id)
 
         except Exception:
             # Retorna 200 mesmo em falha interna para evitar reenvios infinitos do Stripe
@@ -270,13 +272,66 @@ async def webhook_stripe(request: Request) -> JSONResponse:
     return JSONResponse(content={"recebido": True})
 
 
-def _disparar_geracao_relatorio(analise_id: str | None) -> None:
-    """Enfileira a geração do relatório após confirmação do pagamento."""
+async def _disparar_geracao_relatorio(analise_id: str | None) -> None:
+    """
+    Gera o PDF da análise, faz upload no Supabase Storage e atualiza
+    a tabela analises com a URL pública. Nunca propaga exceções.
+    Operações bloqueantes rodam em thread separada para não travar o event loop.
+    """
     if not analise_id:
         logger.warning("Webhook sem analise_id nos metadados — relatório não disparado.")
         return
-    logger.info(f"Geração de relatório enfileirada | analise_id={analise_id}")
-    # TODO: publicar tarefa no worker (Celery/RQ) quando a fila for implementada
+
+    caminho_storage = f"relatorios/{analise_id}.pdf"
+
+    try:
+        pdf_bytes: bytes = await asyncio.to_thread(gerar_relatorio_pdf, analise_id)
+        logger.info(f"PDF gerado | analise_id={analise_id} | tamanho={len(pdf_bytes):,} bytes")
+    except Exception:
+        logger.error(
+            f"Falha ao gerar PDF | analise_id={analise_id}\n{traceback.format_exc()}"
+        )
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.storage
+            .from_(settings.SUPABASE_STORAGE_BUCKET)
+            .upload(
+                caminho_storage,
+                pdf_bytes,
+                {"content-type": "application/pdf", "upsert": "true"},
+            )
+        )
+        logger.info(
+            f"PDF enviado ao Storage | bucket={settings.SUPABASE_STORAGE_BUCKET} "
+            f"| caminho={caminho_storage}"
+        )
+    except Exception:
+        logger.error(
+            f"Falha ao enviar PDF ao Storage | analise_id={analise_id}\n{traceback.format_exc()}"
+        )
+        return
+
+    try:
+        url_publica: str = supabase.storage.from_(
+            settings.SUPABASE_STORAGE_BUCKET
+        ).get_public_url(caminho_storage)
+
+        await asyncio.to_thread(
+            lambda: supabase.table("analises")
+            .update({"url_relatorio_pdf": url_publica})
+            .eq("id", analise_id)
+            .execute()
+        )
+        logger.info(
+            f"URL do relatório salva | analise_id={analise_id} | url={url_publica}"
+        )
+    except Exception:
+        logger.error(
+            f"Falha ao salvar URL do relatório na tabela analises | analise_id={analise_id}\n"
+            f"{traceback.format_exc()}"
+        )
 
 
 @roteador.get(
