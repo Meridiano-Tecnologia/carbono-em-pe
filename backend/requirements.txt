@@ -27,11 +27,12 @@ python-dotenv==1.0.1
 earthengine-api==0.1.414
 
 # Geoespacial
-geopandas==1.0.1
 shapely==2.0.6
-pyproj==3.6.1
-rasterio==1.3.11
-fiona==1.10.1
+# Camada 3 — reativar com Dockerfile quando implementar análise espacial automatizada
+# geopandas==1.0.1
+# pyproj==3.6.1
+# rasterio==1.3.11
+# fiona==1.10.1
 
 # Processamento de arquivos
 aiofiles==24.1.0
