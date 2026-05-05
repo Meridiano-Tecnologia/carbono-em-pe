@@ -12,6 +12,7 @@ from app.api.rotas_saude import roteador as roteador_saude
 from app.api.rotas_usuarios import roteador as roteador_usuarios
 from app.api.rotas_auth import roteador as roteador_auth
 from app.api.rotas_pagamento import roteador as roteador_pagamento
+from app.api.rotas_analises import roteador as roteador_analises
 from loguru import logger
 import sys
 
@@ -54,6 +55,7 @@ app.include_router(roteador_saude)
 app.include_router(roteador_usuarios)
 app.include_router(roteador_auth)
 app.include_router(roteador_pagamento)
+app.include_router(roteador_analises)
 
 
 @app.on_event("startup")
