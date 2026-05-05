@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ['proj', 'gdal', 'geos', 'libxml2', 'cairo', 'pango', 'gdk-pixbuf', 'shared-mime-info']
+aptPkgs = ['libproj-dev', 'proj-data', 'proj-bin', 'libgdal-dev', 'libgeos-dev', 'python3-dev', 'gcc', 'g++', 'libcairo2-dev', 'libpango1.0-dev', 'libgdk-pixbuf2.0-dev', 'libffi-dev', 'shared-mime-info']
