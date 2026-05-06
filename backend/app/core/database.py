@@ -13,6 +13,7 @@ def criar_cliente_supabase() -> Client:
     Usado apenas em operações server-side seguras.
     """
     try:
+        logger.info(f"Chave service role (primeiros 20 chars): {settings.SUPABASE_SERVICE_ROLE_KEY[:20]}")
         cliente = create_client(
             settings.SUPABASE_URL,
             settings.SUPABASE_SERVICE_ROLE_KEY
