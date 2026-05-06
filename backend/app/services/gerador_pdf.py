@@ -1,36 +1,74 @@
 """
 Carbono em Pé — Gerador de relatório em PDF
-Busca dados da análise no Supabase, monta HTML e converte com WeasyPrint.
-
-Dependência de sistema:
-  Linux  (Railway): apt-get install -y libpango-1.0-0 libcairo2
-  macOS  (dev):     DYLD_LIBRARY_PATH=$(brew --prefix)/lib uvicorn ...
+Usa ReportLab — sem dependências de sistema externas.
 """
 import io
 from datetime import date
 from loguru import logger
-from weasyprint import HTML as WeasyHTML
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, Flowable,
+)
 from app.core.database import supabase
 
 
-# ---------------------------------------------------------------------------
-# Entrada pública
-# ---------------------------------------------------------------------------
+# ── Paleta ───────────────────────────────────────────────────────────────────
+_VERDE_ESCURO  = colors.HexColor("#1a5c2e")
+_VERDE_MEDIO   = colors.HexColor("#2d8c4e")
+_VERDE_CLARO   = colors.HexColor("#e8f5ed")
+_BORDA         = colors.HexColor("#c8dfd0")
+_CINZA_LABEL   = colors.HexColor("#6b7280")
+_CINZA_SUBTEXTO = colors.HexColor("#4b5563")
+_CINZA_FUNDO   = colors.HexColor("#f9fafb")
+_CINZA_BORDA   = colors.HexColor("#e5e7eb")
+_LARANJA_BG    = colors.HexColor("#fff7ed")
+_LARANJA_BORDA = colors.HexColor("#fdba74")
+_LARANJA_TEXTO = colors.HexColor("#92400e")
+_TEXTO         = colors.HexColor("#1a1a1a")
+
+_PAGE_W, _PAGE_H = A4
+_MARGEM   = 16 * mm
+_USABLE_W = _PAGE_W - 2 * _MARGEM
+
+
+# ── Barra de progresso (Flowable customizado) ─────────────────────────────────
+class BarraProgresso(Flowable):
+    def __init__(self, pontuacao: float, altura: float = 9):
+        super().__init__()
+        self.pct    = max(0.0, min(float(pontuacao or 0), 100.0)) / 100
+        self._altura = altura
+
+    def wrap(self, availWidth, availHeight):
+        self.width  = availWidth
+        self.height = self._altura
+        return self.width, self.height
+
+    def draw(self):
+        self.canv.setFillColor(_CINZA_BORDA)
+        self.canv.roundRect(0, 0, self.width, self.height, 3, fill=1, stroke=0)
+        if self.pct > 0:
+            self.canv.setFillColor(_VERDE_MEDIO)
+            self.canv.rect(0, 0, self.width * self.pct, self.height, fill=1, stroke=0)
+
+
+# ── Entrada pública ───────────────────────────────────────────────────────────
 
 def gerar_relatorio_pdf(analise_id: str) -> bytes:
     """
     Busca a análise, junta dados da propriedade e do usuário,
-    renderiza HTML e retorna os bytes do PDF.
+    e retorna os bytes do PDF gerado com ReportLab.
     Lança ValueError se a análise não for encontrada.
     """
     dados = _buscar_dados(analise_id)
-    html = _montar_html(dados)
-    return _converter_para_pdf(html)
+    return _gerar_pdf_bytes(dados)
 
 
-# ---------------------------------------------------------------------------
-# Busca de dados
-# ---------------------------------------------------------------------------
+# ── Busca de dados ────────────────────────────────────────────────────────────
 
 def _buscar_dados(analise_id: str) -> dict:
     resp_analise = (
@@ -81,511 +119,361 @@ def _buscar_dados(analise_id: str) -> dict:
     return {"analise": analise, "propriedade": propriedade, "usuario": usuario}
 
 
-# ---------------------------------------------------------------------------
-# Montagem do HTML
-# ---------------------------------------------------------------------------
-
-_COR_VERDE_ESCURO = "#1a5c2e"
-_COR_VERDE_MEDIO = "#2d8c4e"
-_COR_VERDE_CLARO = "#e8f5ed"
-_COR_TEXTO = "#1a1a1a"
-_COR_BORDA = "#c8dfd0"
-
-
-def _barra_pontuacao(pontuacao: float, cor: str = _COR_VERDE_MEDIO) -> str:
-    pct = max(0.0, min(float(pontuacao), 100.0))
-    return f"""
-    <div class="barra-container">
-        <div class="barra-preenchida" style="width:{pct:.1f}%; background:{cor};"></div>
-    </div>
-    <span class="barra-valor">{pct:.0f} / 100</span>"""
-
-
-def _cor_elegibilidade(classificacao: str) -> str:
-    return {"alto": "#1a5c2e", "medio": "#b45309", "baixo": "#991b1b"}.get(
-        classificacao.lower(), _COR_VERDE_ESCURO
-    )
-
-
-def _label_elegibilidade(classificacao: str) -> str:
-    return {"alto": "Alta", "medio": "Média", "baixo": "Baixa"}.get(
-        classificacao.lower(), classificacao.capitalize()
-    )
-
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _formatar_numero(valor, casas: int = 2, unidade: str = "") -> str:
     if valor is None:
         return "—"
     try:
-        formatado = f"{float(valor):,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        formatado = (
+            f"{float(valor):,.{casas}f}"
+            .replace(",", "X").replace(".", ",").replace("X", ".")
+        )
         return f"{formatado} {unidade}".strip()
     except (TypeError, ValueError):
         return str(valor)
 
 
-def _montar_html(dados: dict) -> str:
-    analise = dados["analise"]
-    prop = dados["propriedade"]
-    usuario = dados["usuario"]
+def _cor_elegibilidade(classificacao: str) -> colors.Color:
+    return {
+        "alto":  colors.HexColor("#1a5c2e"),
+        "medio": colors.HexColor("#b45309"),
+        "baixo": colors.HexColor("#991b1b"),
+    }.get((classificacao or "").lower(), _VERDE_ESCURO)
 
-    data_geracao = date.today().strftime("%d/%m/%Y")
-    analise_id_curto = str(analise.get("id", ""))[:8].upper()
 
-    tco2 = analise.get("tco2_estimado")
-    biomassa = analise.get("biomassa_tha")
-    elegibilidade = analise.get("elegibilidade", "—")
-    cor_eleg = _cor_elegibilidade(elegibilidade)
-    label_eleg = _label_elegibilidade(elegibilidade)
-
-    score_adic = analise.get("score_adicionalidade", 0)
-    score_perm = analise.get("score_permanencia", 0)
-    score_titu = analise.get("score_titularidade", 0)
-    score_tam  = analise.get("score_tamanho", 0)
-    score_total = round(
-        (float(score_adic or 0) + float(score_perm or 0)
-         + float(score_titu or 0) + float(score_tam or 0)) / 4, 1
+def _label_elegibilidade(classificacao: str) -> str:
+    return {"alto": "Alta", "medio": "Média", "baixo": "Baixa"}.get(
+        (classificacao or "").lower(), (classificacao or "").capitalize()
     )
 
-    nome_propriedade = prop.get("nome_propriedade", "—")
-    bioma = prop.get("bioma", "—")
-    tipo_veg = prop.get("tipo_vegetacao", "—")
-    area_total = prop.get("area_total_ha")
-    area_veg = prop.get("area_vegetacao_ha")
-    idade = prop.get("idade_vegetacao_anos", "—")
-    codigo_car = prop.get("codigo_car") or "Não informado"
-    nome_usuario = usuario.get("nome", "—")
-    email_usuario = usuario.get("email", "—")
 
-    metodo = analise.get("metodo_calculo", "—")
-    versao = analise.get("versao_algoritmo", "—")
-    camada = analise.get("camada", "—")
-
-    return f"""<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8"/>
-<title>Relatório de Carbono — {analise_id_curto}</title>
-<style>
-  @page {{
-    size: A4;
-    margin: 18mm 16mm 22mm 16mm;
-    @bottom-center {{
-      content: "Carbono em Pé — Meridiano Tecnologia  ·  Página " counter(page) " de " counter(pages);
-      font-size: 8pt;
-      color: #6b7280;
-    }}
-  }}
-
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-  body {{
-    font-family: "Helvetica Neue", Arial, sans-serif;
-    font-size: 10pt;
-    color: {_COR_TEXTO};
-    line-height: 1.5;
-  }}
-
-  /* ── Cabeçalho ── */
-  .cabecalho {{
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding-bottom: 12px;
-    border-bottom: 3px solid {_COR_VERDE_ESCURO};
-    margin-bottom: 18px;
-  }}
-  .cabecalho-marca {{ display: flex; flex-direction: column; gap: 2px; }}
-  .marca-titulo {{
-    font-size: 17pt;
-    font-weight: 700;
-    color: {_COR_VERDE_ESCURO};
-    letter-spacing: -0.3px;
-  }}
-  .marca-subtitulo {{
-    font-size: 9pt;
-    color: {_COR_VERDE_MEDIO};
-    font-weight: 500;
-  }}
-  .cabecalho-meta {{
-    text-align: right;
-    font-size: 8.5pt;
-    color: #4b5563;
-    line-height: 1.6;
-  }}
-  .cabecalho-meta strong {{ color: {_COR_VERDE_ESCURO}; }}
-
-  /* ── Seções ── */
-  .secao {{
-    margin-bottom: 20px;
-  }}
-  .secao-titulo {{
-    font-size: 11pt;
-    font-weight: 700;
-    color: {_COR_VERDE_ESCURO};
-    border-left: 4px solid {_COR_VERDE_MEDIO};
-    padding-left: 8px;
-    margin-bottom: 10px;
-  }}
-
-  /* ── Grade de dados ── */
-  .grade {{
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px 24px;
-  }}
-  .grade-item {{ display: flex; flex-direction: column; gap: 1px; }}
-  .grade-label {{
-    font-size: 7.5pt;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #6b7280;
-    font-weight: 600;
-  }}
-  .grade-valor {{
-    font-size: 10pt;
-    color: {_COR_TEXTO};
-    font-weight: 500;
-  }}
-
-  /* ── Destaque tCO₂ ── */
-  .destaque-tco2 {{
-    background: {_COR_VERDE_CLARO};
-    border: 1.5px solid {_COR_BORDA};
-    border-radius: 6px;
-    padding: 14px 18px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-  }}
-  .tco2-bloco {{ display: flex; flex-direction: column; gap: 2px; }}
-  .tco2-label {{
-    font-size: 8pt;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #4b5563;
-    font-weight: 600;
-  }}
-  .tco2-valor {{
-    font-size: 26pt;
-    font-weight: 800;
-    color: {_COR_VERDE_ESCURO};
-    line-height: 1.1;
-  }}
-  .tco2-unidade {{
-    font-size: 11pt;
-    font-weight: 500;
-    color: {_COR_VERDE_MEDIO};
-  }}
-  .tco2-biomassa {{
-    font-size: 8.5pt;
-    color: #4b5563;
-    margin-top: 2px;
-  }}
-  .eleg-bloco {{
-    text-align: right;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
-  }}
-  .eleg-label {{
-    font-size: 8pt;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #4b5563;
-    font-weight: 600;
-  }}
-  .eleg-badge {{
-    font-size: 14pt;
-    font-weight: 800;
-    color: {cor_eleg};
-  }}
-  .eleg-total {{
-    font-size: 9pt;
-    color: #6b7280;
-  }}
-
-  /* ── Barras de pontuação ── */
-  .dimensao {{
-    margin-bottom: 10px;
-  }}
-  .dimensao-cabecalho {{
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 3px;
-  }}
-  .dimensao-nome {{
-    font-size: 9.5pt;
-    font-weight: 700;
-    color: {_COR_VERDE_ESCURO};
-  }}
-  .barra-container {{
-    width: 100%;
-    height: 10px;
-    background: #e5e7eb;
-    border-radius: 5px;
-    overflow: hidden;
-    display: inline-block;
-    vertical-align: middle;
-  }}
-  .barra-preenchida {{
-    height: 100%;
-    border-radius: 5px;
-  }}
-  .barra-valor {{
-    font-size: 8.5pt;
-    color: #4b5563;
-    margin-left: 8px;
-    white-space: nowrap;
-  }}
-  .dimensao-descricao {{
-    font-size: 7.5pt;
-    color: #6b7280;
-    margin-top: 3px;
-    font-style: italic;
-  }}
-
-  /* ── Notas metodológicas ── */
-  .nota-box {{
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 5px;
-    padding: 11px 14px;
-    font-size: 8.5pt;
-    color: #374151;
-    line-height: 1.55;
-    margin-bottom: 14px;
-  }}
-  .nota-box strong {{ color: {_COR_VERDE_ESCURO}; }}
-
-  /* ── Disclaimer ── */
-  .disclaimer {{
-    background: #fff7ed;
-    border: 1.5px solid #fdba74;
-    border-radius: 5px;
-    padding: 10px 14px;
-    font-size: 8pt;
-    color: #92400e;
-    line-height: 1.5;
-  }}
-  .disclaimer strong {{ color: #78350f; }}
-
-  /* ── Rodapé ── */
-  .rodape {{
-    margin-top: 22px;
-    padding-top: 10px;
-    border-top: 1.5px solid {_COR_BORDA};
-    font-size: 7.5pt;
-    color: #6b7280;
-  }}
-  .rodape-titulo {{ font-weight: 700; color: {_COR_VERDE_ESCURO}; margin-bottom: 4px; }}
-  .rodape-links {{ display: flex; flex-direction: column; gap: 2px; }}
-  .rodape-link {{ color: #2563eb; }}
-
-  /* ── Quebra de página ── */
-  .quebra {{ page-break-before: always; }}
-</style>
-</head>
-<body>
-
-<!-- ════════════════════════════════════════════════════════
-     CABEÇALHO
-════════════════════════════════════════════════════════ -->
-<div class="cabecalho">
-  <div class="cabecalho-marca">
-    <div class="marca-titulo">Carbono em Pé</div>
-    <div class="marca-subtitulo">Meridiano Tecnologia</div>
-  </div>
-  <div class="cabecalho-meta">
-    <strong>Relatório de Diagnóstico de Carbono</strong><br/>
-    Emitido em: {data_geracao}<br/>
-    Código: <strong>{analise_id_curto}</strong> &nbsp;·&nbsp; Camada {camada}
-  </div>
-</div>
+def _rodape_pagina(canvas, doc):
+    canvas.saveState()
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColor(_CINZA_LABEL)
+    canvas.drawCentredString(
+        _PAGE_W / 2, 10 * mm,
+        f"Carbono em Pé — Meridiano Tecnologia  ·  Página {doc.page}"
+    )
+    canvas.restoreState()
 
 
-<!-- ════════════════════════════════════════════════════════
-     DADOS DA PROPRIEDADE E DO RESPONSÁVEL
-════════════════════════════════════════════════════════ -->
-<div class="secao">
-  <div class="secao-titulo">Dados da Propriedade</div>
-  <div class="grade">
-    <div class="grade-item">
-      <span class="grade-label">Nome da propriedade</span>
-      <span class="grade-valor">{nome_propriedade}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Responsável</span>
-      <span class="grade-valor">{nome_usuario}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Bioma</span>
-      <span class="grade-valor">{bioma}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Tipo de vegetação</span>
-      <span class="grade-valor">{tipo_veg}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Área total da propriedade</span>
-      <span class="grade-valor">{_formatar_numero(area_total, 2, "ha")}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Área de vegetação nativa</span>
-      <span class="grade-valor">{_formatar_numero(area_veg, 2, "ha")}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Idade estimada da vegetação</span>
-      <span class="grade-valor">{idade} anos</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Código CAR</span>
-      <span class="grade-valor">{codigo_car}</span>
-    </div>
-    <div class="grade-item">
-      <span class="grade-label">Contato</span>
-      <span class="grade-valor">{email_usuario}</span>
-    </div>
-  </div>
-</div>
+# ── Estilos ───────────────────────────────────────────────────────────────────
+
+def _estilos() -> dict:
+    base = getSampleStyleSheet()
+
+    def novo(nome, **kw):
+        return ParagraphStyle(nome, parent=base["Normal"], **kw)
+
+    return {
+        "marca_titulo": novo("marca_titulo",
+            fontSize=18, fontName="Helvetica-Bold", textColor=_VERDE_ESCURO, leading=22),
+        "marca_subtitulo": novo("marca_subtitulo",
+            fontSize=9, fontName="Helvetica", textColor=_VERDE_MEDIO),
+        "meta_direita": novo("meta_direita",
+            fontSize=8.5, textColor=_CINZA_SUBTEXTO, alignment=TA_RIGHT, leading=13),
+        "secao_titulo": novo("secao_titulo",
+            fontSize=11, fontName="Helvetica-Bold", textColor=_VERDE_ESCURO,
+            leading=16, spaceBefore=4, spaceAfter=6),
+        "label": novo("label",
+            fontSize=7.5, fontName="Helvetica-Bold", textColor=_CINZA_LABEL, leading=11),
+        "valor": novo("valor",
+            fontSize=10, textColor=_TEXTO, leading=14),
+        "tco2_label": novo("tco2_label",
+            fontSize=8, fontName="Helvetica-Bold", textColor=_CINZA_SUBTEXTO, leading=11),
+        "tco2_valor": novo("tco2_valor",
+            fontSize=26, fontName="Helvetica-Bold", textColor=_VERDE_ESCURO, leading=30),
+        "tco2_unidade": novo("tco2_unidade",
+            fontSize=10, textColor=_VERDE_MEDIO, leading=13),
+        "tco2_biomassa": novo("tco2_biomassa",
+            fontSize=8.5, textColor=_CINZA_SUBTEXTO, leading=12),
+        "eleg_label": novo("eleg_label",
+            fontSize=8, fontName="Helvetica-Bold", textColor=_CINZA_SUBTEXTO,
+            alignment=TA_RIGHT, leading=11),
+        "eleg_total": novo("eleg_total",
+            fontSize=9, textColor=_CINZA_LABEL, alignment=TA_RIGHT, leading=12),
+        "dimensao_nome": novo("dimensao_nome",
+            fontSize=9.5, fontName="Helvetica-Bold", textColor=_VERDE_ESCURO, leading=13),
+        "dimensao_score": novo("dimensao_score",
+            fontSize=8.5, textColor=_CINZA_SUBTEXTO, alignment=TA_RIGHT, leading=12),
+        "dimensao_desc": novo("dimensao_desc",
+            fontSize=7.5, fontName="Helvetica-Oblique", textColor=_CINZA_LABEL, leading=11),
+        "nota": novo("nota",
+            fontSize=8.5, textColor=colors.HexColor("#374151"), leading=13),
+        "disclaimer": novo("disclaimer",
+            fontSize=8, textColor=_LARANJA_TEXTO, leading=12),
+        "fonte_titulo": novo("fonte_titulo",
+            fontSize=8, fontName="Helvetica-Bold", textColor=_VERDE_ESCURO, leading=12),
+        "fonte": novo("fonte",
+            fontSize=7.5, textColor=colors.HexColor("#374151"), leading=11),
+    }
 
 
-<!-- ════════════════════════════════════════════════════════
-     RESULTADO — tCO₂
-════════════════════════════════════════════════════════ -->
-<div class="secao">
-  <div class="secao-titulo">Resultado do Cálculo de Estoque de Carbono</div>
-  <div class="destaque-tco2">
-    <div class="tco2-bloco">
-      <span class="tco2-label">Estoque estimado de CO₂ equivalente</span>
-      <span class="tco2-valor">{_formatar_numero(tco2, 1)}</span>
-      <span class="tco2-unidade">toneladas de CO₂ equivalente (tCO₂e)</span>
-      <span class="tco2-biomassa">Biomassa total: {_formatar_numero(biomassa, 2, "Mg/ha")}</span>
-    </div>
-    <div class="eleg-bloco">
-      <span class="eleg-label">Elegibilidade estimada</span>
-      <span class="eleg-badge">{label_eleg}</span>
-      <span class="eleg-total">Pontuação geral: {score_total:.0f} / 100</span>
-    </div>
-  </div>
-</div>
+# ── Geração do PDF ────────────────────────────────────────────────────────────
 
+def _gerar_pdf_bytes(dados: dict) -> bytes:
+    analise  = dados["analise"]
+    prop     = dados["propriedade"]
+    usuario  = dados["usuario"]
+    s        = _estilos()
 
-<!-- ════════════════════════════════════════════════════════
-     PONTUAÇÃO DE ELEGIBILIDADE
-════════════════════════════════════════════════════════ -->
-<div class="secao">
-  <div class="secao-titulo">Pontuação de Elegibilidade para Mercado Voluntário de Carbono</div>
+    data_geracao     = date.today().strftime("%d/%m/%Y")
+    analise_id_curto = str(analise.get("id", ""))[:8].upper()
+    camada           = analise.get("camada", "—")
 
-  <div class="dimensao">
-    <div class="dimensao-cabecalho">
-      <span class="dimensao-nome">Adicionalidade</span>
-    </div>
-    {_barra_pontuacao(score_adic)}
-    <div class="dimensao-descricao">
-      Avalia se a conservação excede as obrigações legais e gera benefício climático real e verificável.
-    </div>
-  </div>
+    tco2          = analise.get("tco2_estimado")
+    biomassa      = analise.get("biomassa_tha")
+    elegibilidade = analise.get("elegibilidade") or ""
+    cor_eleg      = _cor_elegibilidade(elegibilidade)
+    label_eleg    = _label_elegibilidade(elegibilidade)
 
-  <div class="dimensao">
-    <div class="dimensao-cabecalho">
-      <span class="dimensao-nome">Permanência</span>
-    </div>
-    {_barra_pontuacao(score_perm)}
-    <div class="dimensao-descricao">
-      Avalia o risco de reversão do estoque de carbono ao longo do tempo, considerando pressão histórica de desmatamento e maturidade da vegetação.
-    </div>
-  </div>
+    score_adic  = float(analise.get("score_adicionalidade") or 0)
+    score_perm  = float(analise.get("score_permanencia") or 0)
+    score_titu  = float(analise.get("score_titularidade") or 0)
+    score_tam   = float(analise.get("score_tamanho") or 0)
+    score_total = round((score_adic + score_perm + score_titu + score_tam) / 4, 1)
 
-  <div class="dimensao">
-    <div class="dimensao-cabecalho">
-      <span class="dimensao-nome">Titularidade e Conformidade</span>
-    </div>
-    {_barra_pontuacao(score_titu)}
-    <div class="dimensao-descricao">
-      Avalia a regularidade fundiária e ambiental: Reserva Legal averbada e Áreas de Preservação Permanente registradas no CAR.
-    </div>
-  </div>
+    nome_propriedade = prop.get("nome_propriedade") or "—"
+    bioma            = prop.get("bioma") or "—"
+    tipo_veg         = prop.get("tipo_vegetacao") or "—"
+    area_total       = prop.get("area_total_ha")
+    area_veg         = prop.get("area_vegetacao_ha")
+    idade            = prop.get("idade_vegetacao_anos") or "—"
+    codigo_car       = prop.get("codigo_car") or "Não informado"
+    nome_usuario     = usuario.get("nome") or "—"
+    email_usuario    = usuario.get("email") or "—"
+    metodo           = analise.get("metodo_calculo") or "—"
+    versao           = analise.get("versao_algoritmo") or "—"
 
-  <div class="dimensao">
-    <div class="dimensao-cabecalho">
-      <span class="dimensao-nome">Tamanho e Viabilidade Econômica</span>
-    </div>
-    {_barra_pontuacao(score_tam)}
-    <div class="dimensao-descricao">
-      Projetos acima de 500 ha apresentam maior viabilidade de transação e atração de compradores institucionais no mercado voluntário.
-    </div>
-  </div>
-</div>
-
-
-<!-- ════════════════════════════════════════════════════════
-     NOTA METODOLÓGICA
-════════════════════════════════════════════════════════ -->
-<div class="secao">
-  <div class="secao-titulo">Nota Metodológica</div>
-  <div class="nota-box">
-    <strong>Metodologia de cálculo de biomassa:</strong> O estoque de carbono foi estimado por meio de equações alométricas regionais de
-    <strong>Chave et al. (2005)</strong> — <em>Global Ecology and Biogeography</em>, 14:677–688 — calibradas para zonas climáticas
-    tropicais e subtropicais do Brasil. Os coeficientes foram aplicados com diâmetro à altura do peito (DAP) médio representativo
-    por bioma e tipo de vegetação, e escalonados pela densidade arbórea típica. A biomassa subterrânea foi estimada com fatores
-    raiz/parte aérea do <strong>IPCC (2006 Guidelines for National Greenhouse Gas Inventories, Tabela 4.4)</strong>.
-    O fator de conversão biomassa → carbono utilizado foi <strong>0,47</strong> (padrão IPCC) e a conversão para CO₂ equivalente
-    aplicou o fator <strong>44/12</strong>.<br/><br/>
-    <strong>Pontuação de elegibilidade:</strong> Os critérios utilizados são compatíveis com os princípios dos padrões
-    <strong>Verra VCS (Verified Carbon Standard)</strong> e <strong>REDD+ (Reducing Emissions from Deforestation and Forest
-    Degradation)</strong>. As quatro dimensões avaliadas — adicionalidade, permanência, titularidade e tamanho — são os pilares
-    exigidos por mercados voluntários de carbono de alta integridade.<br/><br/>
-    Método registrado: <strong>{metodo}</strong> · Versão do algoritmo: <strong>{versao}</strong>
-  </div>
-</div>
-
-
-<!-- ════════════════════════════════════════════════════════
-     DISCLAIMER
-════════════════════════════════════════════════════════ -->
-<div class="disclaimer">
-  <strong>&#9888; Aviso importante:</strong> Este documento é um <strong>diagnóstico preliminar automatizado</strong> e
-  <strong>não constitui laudo técnico, parecer pericial ou certificação de crédito de carbono</strong>.
-  Os valores de tCO₂e são estimativas baseadas em parâmetros médios regionais e não substituem inventário
-  florestal de campo, auditoria por organismo de validação/verificação (VVB) acreditado, nem processo formal
-  de certificação pelos padrões Verra VCS, Gold Standard ou equivalente.
-  A Meridiano Tecnologia não assume responsabilidade por decisões comerciais, legais ou ambientais tomadas
-  com base exclusiva neste relatório. Consulte um engenheiro florestal habilitado antes de iniciar qualquer
-  projeto de mercado voluntário de carbono.
-</div>
-
-
-<!-- ════════════════════════════════════════════════════════
-     RODAPÉ — FONTES OFICIAIS
-════════════════════════════════════════════════════════ -->
-<div class="rodape">
-  <div class="rodape-titulo">Fontes e Referências Oficiais</div>
-  <div class="rodape-links">
-    <span>· IPCC (2006). <em>2006 IPCC Guidelines for National Greenhouse Gas Inventories</em>.
-      <span class="rodape-link">https://www.ipcc-nggip.iges.or.jp/public/2006gl/</span></span>
-    <span>· Chave et al. (2005). <em>Tree allometry and improved estimation of carbon stocks...</em>
-      Global Ecology and Biogeography, 14(6):677–688.</span>
-    <span>· Verra VCS Standard.
-      <span class="rodape-link">https://verra.org/programs/verified-carbon-standard/</span></span>
-    <span>· REDD+ (ONU-REDD).
-      <span class="rodape-link">https://www.unredd.net/</span></span>
-    <span>· Sistema Nacional de Cadastro Ambiental Rural (SICAR).
-      <span class="rodape-link">https://www.car.gov.br/</span></span>
-  </div>
-</div>
-
-</body>
-</html>"""
-
-
-# ---------------------------------------------------------------------------
-# Conversão HTML → PDF
-# ---------------------------------------------------------------------------
-
-def _converter_para_pdf(html: str) -> bytes:
     buffer = io.BytesIO()
-    WeasyHTML(string=html).write_pdf(buffer)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=_MARGEM,
+        rightMargin=_MARGEM,
+        topMargin=_MARGEM,
+        bottomMargin=18 * mm,
+        title=f"Relatório de Carbono — {analise_id_curto}",
+        author="Meridiano Tecnologia",
+    )
+
+    story = []
+
+    # ── Cabeçalho ─────────────────────────────────────────────────────────────
+    meta_html = (
+        f"<b>Relatório de Diagnóstico de Carbono</b><br/>"
+        f"Emitido em: {data_geracao}<br/>"
+        f"Código: <b>{analise_id_curto}</b>  ·  Camada {camada}"
+    )
+    cabecalho = Table(
+        [[
+            [Paragraph("Carbono em Pé", s["marca_titulo"]),
+             Paragraph("Meridiano Tecnologia", s["marca_subtitulo"])],
+            Paragraph(meta_html, s["meta_direita"]),
+        ]],
+        colWidths=[_USABLE_W * 0.55, _USABLE_W * 0.45],
+    )
+    cabecalho.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(cabecalho)
+    story.append(HRFlowable(width="100%", thickness=2, color=_VERDE_ESCURO, spaceAfter=12))
+
+    # ── Dados da Propriedade ───────────────────────────────────────────────────
+    story.append(Paragraph("Dados da Propriedade", s["secao_titulo"]))
+
+    def campo(label: str, valor: str) -> list:
+        return [Paragraph(label, s["label"]), Paragraph(valor, s["valor"])]
+
+    campos = [
+        campo("Nome da propriedade",          nome_propriedade),
+        campo("Responsável",                  nome_usuario),
+        campo("Bioma",                        bioma),
+        campo("Tipo de vegetação",            tipo_veg),
+        campo("Área total da propriedade",    _formatar_numero(area_total, 2, "ha")),
+        campo("Área de vegetação nativa",     _formatar_numero(area_veg, 2, "ha")),
+        campo("Idade estimada da vegetação",  f"{idade} anos"),
+        campo("Código CAR",                   codigo_car),
+        campo("Contato",                      email_usuario),
+    ]
+    # Agrupa em pares para duas colunas
+    linhas_prop = []
+    for i in range(0, len(campos), 2):
+        esq = campos[i]
+        dir_ = campos[i + 1] if i + 1 < len(campos) else [Paragraph("", s["label"]), Paragraph("", s["valor"])]
+        linhas_prop.append([esq, dir_])
+
+    tabela_prop = Table(linhas_prop, colWidths=[_USABLE_W * 0.5, _USABLE_W * 0.5])
+    tabela_prop.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(tabela_prop)
+    story.append(Spacer(1, 8))
+
+    # ── Resultado tCO₂ ─────────────────────────────────────────────────────────
+    story.append(Paragraph("Resultado do Cálculo de Estoque de Carbono", s["secao_titulo"]))
+
+    eleg_style = ParagraphStyle(
+        "eleg_badge", parent=s["eleg_total"],
+        fontSize=16, fontName="Helvetica-Bold", textColor=cor_eleg, leading=20,
+    )
+    caixa_tco2 = Table(
+        [[
+            [
+                Paragraph("Estoque estimado de CO₂ equivalente", s["tco2_label"]),
+                Paragraph(_formatar_numero(tco2, 1), s["tco2_valor"]),
+                Paragraph("toneladas de CO₂ equivalente (tCO₂e)", s["tco2_unidade"]),
+                Paragraph(f"Biomassa total: {_formatar_numero(biomassa, 2, 'Mg/ha')}", s["tco2_biomassa"]),
+            ],
+            [
+                Paragraph("Elegibilidade estimada", s["eleg_label"]),
+                Paragraph(label_eleg, eleg_style),
+                Paragraph(f"Pontuação geral: {score_total:.0f} / 100", s["eleg_total"]),
+            ],
+        ]],
+        colWidths=[_USABLE_W * 0.6, _USABLE_W * 0.4],
+    )
+    caixa_tco2.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _VERDE_CLARO),
+        ("BOX",           (0, 0), (-1, -1), 1.5, _BORDA),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 14),
+        ("TOPPADDING",    (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.append(caixa_tco2)
+    story.append(Spacer(1, 14))
+
+    # ── Pontuação de Elegibilidade ─────────────────────────────────────────────
+    story.append(Paragraph(
+        "Pontuação de Elegibilidade para Mercado Voluntário de Carbono",
+        s["secao_titulo"],
+    ))
+
+    dimensoes = [
+        (
+            "Adicionalidade", score_adic,
+            "Avalia se a conservação excede as obrigações legais e gera benefício climático real e verificável.",
+        ),
+        (
+            "Permanência", score_perm,
+            "Avalia o risco de reversão do estoque de carbono ao longo do tempo, considerando pressão "
+            "histórica de desmatamento e maturidade da vegetação.",
+        ),
+        (
+            "Titularidade e Conformidade", score_titu,
+            "Avalia a regularidade fundiária e ambiental: Reserva Legal averbada e Áreas de Preservação "
+            "Permanente registradas no CAR.",
+        ),
+        (
+            "Tamanho e Viabilidade Econômica", score_tam,
+            "Projetos acima de 500 ha apresentam maior viabilidade de transação e atração de compradores "
+            "institucionais no mercado voluntário.",
+        ),
+    ]
+    for nome, score, descricao in dimensoes:
+        cabecalho_dim = Table(
+            [[Paragraph(nome, s["dimensao_nome"]),
+              Paragraph(f"{score:.0f} / 100", s["dimensao_score"])]],
+            colWidths=[_USABLE_W * 0.75, _USABLE_W * 0.25],
+        )
+        cabecalho_dim.setStyle(TableStyle([
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            ("TOPPADDING",    (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("VALIGN",        (0, 0), (-1, -1), "BOTTOM"),
+        ]))
+        story.append(cabecalho_dim)
+        story.append(BarraProgresso(score))
+        story.append(Spacer(1, 3))
+        story.append(Paragraph(descricao, s["dimensao_desc"]))
+        story.append(Spacer(1, 8))
+
+    # ── Nota Metodológica ──────────────────────────────────────────────────────
+    story.append(Paragraph("Nota Metodológica", s["secao_titulo"]))
+    nota_texto = (
+        "<b>Metodologia de cálculo de biomassa:</b> O estoque de carbono foi estimado por meio de equações "
+        "alométricas regionais de <b>Chave et al. (2005)</b> — <i>Global Ecology and Biogeography</i>, "
+        "14:677–688 — calibradas para zonas climáticas tropicais e subtropicais do Brasil. Os coeficientes "
+        "foram aplicados com diâmetro à altura do peito (DAP) médio representativo por bioma e tipo de "
+        "vegetação, e escalonados pela densidade arbórea típica. A biomassa subterrânea foi estimada com "
+        "fatores raiz/parte aérea do <b>IPCC (2006 Guidelines for National Greenhouse Gas Inventories, "
+        "Tabela 4.4)</b>. O fator de conversão biomassa → carbono utilizado foi <b>0,47</b> (padrão IPCC) "
+        "e a conversão para CO₂ equivalente aplicou o fator <b>44/12</b>.<br/><br/>"
+        "<b>Pontuação de elegibilidade:</b> Os critérios utilizados são compatíveis com os princípios dos "
+        "padrões <b>Verra VCS (Verified Carbon Standard)</b> e <b>REDD+ (Reducing Emissions from "
+        "Deforestation and Forest Degradation)</b>. As quatro dimensões avaliadas — adicionalidade, "
+        "permanência, titularidade e tamanho — são os pilares exigidos por mercados voluntários de carbono "
+        f"de alta integridade.<br/><br/>Método registrado: <b>{metodo}</b> · Versão do algoritmo: <b>{versao}</b>"
+    )
+    caixa_nota = Table(
+        [[Paragraph(nota_texto, s["nota"])]],
+        colWidths=[_USABLE_W],
+    )
+    caixa_nota.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _CINZA_FUNDO),
+        ("BOX",           (0, 0), (-1, -1), 1, _CINZA_BORDA),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 14),
+        ("TOPPADDING",    (0, 0), (-1, -1), 11),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
+    ]))
+    story.append(caixa_nota)
+    story.append(Spacer(1, 12))
+
+    # ── Disclaimer ─────────────────────────────────────────────────────────────
+    disclaimer_texto = (
+        "<b>Aviso importante:</b> Este documento é um <b>diagnóstico preliminar automatizado</b> e "
+        "<b>não constitui laudo técnico, parecer pericial ou certificação de crédito de carbono</b>. "
+        "Os valores de tCO₂e são estimativas baseadas em parâmetros médios regionais e não substituem "
+        "inventário florestal de campo, auditoria por organismo de validação/verificação (VVB) acreditado, "
+        "nem processo formal de certificação pelos padrões Verra VCS, Gold Standard ou equivalente. "
+        "A Meridiano Tecnologia não assume responsabilidade por decisões comerciais, legais ou ambientais "
+        "tomadas com base exclusiva neste relatório. Consulte um engenheiro florestal habilitado antes de "
+        "iniciar qualquer projeto de mercado voluntário de carbono."
+    )
+    caixa_disc = Table(
+        [[Paragraph(disclaimer_texto, s["disclaimer"])]],
+        colWidths=[_USABLE_W],
+    )
+    caixa_disc.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), _LARANJA_BG),
+        ("BOX",           (0, 0), (-1, -1), 1.5, _LARANJA_BORDA),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 14),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    story.append(caixa_disc)
+    story.append(Spacer(1, 14))
+
+    # ── Fontes e Referências ───────────────────────────────────────────────────
+    story.append(HRFlowable(width="100%", thickness=1.5, color=_BORDA, spaceBefore=4, spaceAfter=6))
+    story.append(Paragraph("Fontes e Referências Oficiais", s["fonte_titulo"]))
+    story.append(Spacer(1, 3))
+    for fonte in [
+        "· IPCC (2006). <i>2006 IPCC Guidelines for National Greenhouse Gas Inventories</i>. "
+        "https://www.ipcc-nggip.iges.or.jp/public/2006gl/",
+        "· Chave et al. (2005). <i>Tree allometry and improved estimation of carbon stocks...</i> "
+        "Global Ecology and Biogeography, 14(6):677–688.",
+        "· Verra VCS Standard. https://verra.org/programs/verified-carbon-standard/",
+        "· REDD+ (ONU-REDD). https://www.unredd.net/",
+        "· Sistema Nacional de Cadastro Ambiental Rural (SICAR). https://www.car.gov.br/",
+    ]:
+        story.append(Paragraph(fonte, s["fonte"]))
+
+    doc.build(story, onFirstPage=_rodape_pagina, onLaterPages=_rodape_pagina)
+    logger.info(f"PDF gerado com sucesso — analise_id={analise_id_curto}")
     return buffer.getvalue()

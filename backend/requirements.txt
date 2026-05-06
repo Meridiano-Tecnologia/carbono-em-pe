@@ -39,7 +39,7 @@ aiofiles==24.1.0
 python-multipart==0.0.9
 
 # Geração de PDF
-weasyprint==62.3
+reportlab==4.2.2
 
 # Pagamentos
 stripe==10.12.0
