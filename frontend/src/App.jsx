@@ -5,6 +5,7 @@ import PaginaCadastro from './pages/PaginaCadastro'
 import PaginaEstimativa from './pages/PaginaEstimativa'
 import PaginaResultado from './pages/PaginaResultado'
 import PaginaPainel from './pages/PaginaPainel'
+import PaginaSucesso from './pages/PaginaSucesso'
 
 function RotaProtegida({ children }) {
   const token = localStorage.getItem('carbono_token')
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/cadastro" element={<PaginaCadastro />} />
         <Route path="/estimativa" element={<PaginaEstimativa />} />
         <Route path="/resultado/:analise_id" element={<PaginaResultado />} />
+        <Route path="/pagamento/sucesso" element={<PaginaSucesso />} />
         <Route
           path="/painel"
           element={
