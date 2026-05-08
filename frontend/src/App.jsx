@@ -22,7 +22,14 @@ export default function App() {
         <Route path="/cadastro" element={<PaginaCadastro />} />
         <Route path="/estimativa" element={<PaginaEstimativa />} />
         <Route path="/resultado/:analise_id" element={<PaginaResultado />} />
-        <Route path="/pagamento/sucesso" element={<PaginaSucesso />} />
+        <Route
+          path="/pagamento/sucesso"
+          element={
+            <RotaProtegida>
+              <PaginaSucesso />
+            </RotaProtegida>
+          }
+        />
         <Route
           path="/painel"
           element={

@@ -71,6 +71,13 @@ class RespostaStatus(BaseModel):
     stripe_session_id: str | None
 
 
+class RespostaSessaoPorId(BaseModel):
+    valor_centavos: int
+    status: str
+    camada: int
+    criado_em: str | None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -331,6 +338,64 @@ async def _disparar_geracao_relatorio(analise_id: str | None) -> None:
         logger.error(
             f"Falha ao salvar URL do relatório na tabela analises | analise_id={analise_id}\n"
             f"{traceback.format_exc()}"
+        )
+
+
+@roteador.get(
+    "/sessao/{sessao_id}",
+    response_model=RespostaSessaoPorId,
+    summary="Consulta pagamento pelo ID de sessão Stripe",
+    response_description="Dados do pagamento vinculado à sessão",
+)
+async def pagamento_por_sessao(
+    sessao_id: str,
+    payload: dict = Depends(usuario_autenticado),
+) -> JSONResponse:
+    """
+    Busca o pagamento pelo stripe_session_id.
+    Usuário só pode consultar pagamentos da sua própria conta.
+    """
+    usuario_id = payload.get("sub")
+
+    try:
+        resultado = (
+            supabase.table("pagamentos")
+            .select("usuario_id, valor_centavos, status, camada, criado_em")
+            .eq("stripe_session_id", sessao_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not resultado.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Pagamento não encontrado para esta sessão.",
+            )
+
+        registro = resultado.data[0]
+
+        if registro["usuario_id"] != usuario_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acesso não autorizado.",
+            )
+
+        return JSONResponse(
+            content=RespostaSessaoPorId(
+                valor_centavos=registro["valor_centavos"],
+                status=registro["status"],
+                camada=registro["camada"],
+                criado_em=str(registro["criado_em"]) if registro.get("criado_em") else None,
+            ).model_dump()
+        )
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error(f"Erro ao consultar sessão | sessao_id={sessao_id}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno ao consultar o pagamento.",
         )
 
 
