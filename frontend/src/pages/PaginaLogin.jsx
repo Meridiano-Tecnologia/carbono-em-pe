@@ -180,6 +180,17 @@ export default function PaginaLogin() {
               </div>
             </div>
 
+            {/* Esqueci minha senha */}
+            <div className="text-right mb-5" style={{ marginTop: '-12px' }}>
+              <Link
+                to="/esqueci-senha"
+                className="text-xs font-semibold underline transition-opacity hover:opacity-75"
+                style={{ color: C.textoMuted }}
+              >
+                Esqueci minha senha
+              </Link>
+            </div>
+
             {/* Mensagem de erro */}
             {mensagemErro && (
               <div
