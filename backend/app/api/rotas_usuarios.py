@@ -189,20 +189,25 @@ async def cadastrar_usuario(entrada: EntradaCadastroUsuario, request: Request) -
         logger.info(f"Usuário cadastrado — id={id_gerado} | email={entrada.email}")
 
         if entrada.consentimentos:
-            registros = [
-                {
-                    "usuario_id": id_gerado,
-                    "tipo": c.tipo,
-                    "aceito": c.aceito,
-                    "obrigatorio": c.obrigatorio,
-                    "texto_exibido": c.texto_exibido,
-                    "ip_address": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                }
-                for c in entrada.consentimentos
-            ]
-            supabase.table("consentimentos").insert(registros).execute()
-            logger.info(f"Consentimentos registrados — usuario_id={id_gerado} | total={len(registros)}")
+            try:
+                registros = [
+                    {
+                        "usuario_id": id_gerado,
+                        "tipo": c.tipo,
+                        "aceito": c.aceito,
+                        "obrigatorio": c.obrigatorio,
+                        "texto_exibido": c.texto_exibido,
+                        "ip_address": request.client.host if request.client else None,
+                        "user_agent": request.headers.get("user-agent"),
+                    }
+                    for c in entrada.consentimentos
+                ]
+                supabase.table("consentimentos").insert(registros).execute()
+                logger.info(f"Consentimentos registrados — usuario_id={id_gerado} | total={len(registros)}")
+            except Exception:
+                logger.error(
+                    f"Falha ao salvar consentimentos — usuario_id={id_gerado}\n{traceback.format_exc()}"
+                )
 
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
