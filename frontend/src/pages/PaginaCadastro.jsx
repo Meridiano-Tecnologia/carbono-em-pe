@@ -444,11 +444,19 @@ export default function PaginaCadastro() {
 
     setCarregando(true)
     try {
+      const consentimentosPayload = CONSENTIMENTOS.map((c) => ({
+        tipo: c.id,
+        aceito: marcados[c.id] || false,
+        obrigatorio: c.obrigatorio,
+        texto_exibido: c.texto,
+      }))
+
       await api.post('/usuarios/cadastrar', {
         nome,
         email,
         senha,
         ...(telefone ? { telefone: telefone.replace(/\D/g, '') } : {}),
+        consentimentos: consentimentosPayload,
       })
 
       const respLogin = await api.post('/auth/login', { email, senha })

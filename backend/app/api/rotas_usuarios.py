@@ -3,8 +3,9 @@ Carbono em Pé — Rotas de cadastro de usuários e propriedades
 """
 import re
 import traceback
+from typing import List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from enum import Enum
@@ -42,6 +43,13 @@ class TipoVegetacao(str, Enum):
 # Modelos — cadastro de usuário
 # ---------------------------------------------------------------------------
 
+class EntradaConsentimento(BaseModel):
+    tipo: str
+    aceito: bool
+    obrigatorio: bool
+    texto_exibido: str
+
+
 class EntradaCadastroUsuario(BaseModel):
     nome: str = Field(..., min_length=2, max_length=200, description="Nome completo do usuário")
     email: EmailStr = Field(..., description="Endereço de e-mail — deve ser único")
@@ -56,6 +64,7 @@ class EntradaCadastroUsuario(BaseModel):
         max_length=20,
         description="Telefone com DDD, somente dígitos (opcional)",
     )
+    consentimentos: List[EntradaConsentimento] = []
 
     @field_validator("senha")
     @classmethod
@@ -144,7 +153,7 @@ class RespostaCadastroPropriedade(BaseModel):
     summary="Cadastra um novo usuário",
     response_description="ID do usuário criado",
 )
-async def cadastrar_usuario(entrada: EntradaCadastroUsuario) -> JSONResponse:
+async def cadastrar_usuario(entrada: EntradaCadastroUsuario, request: Request) -> JSONResponse:
     """
     Cria um novo usuário na tabela `usuarios`.
     Retorna erro 409 se o e-mail já estiver cadastrado.
@@ -178,6 +187,22 @@ async def cadastrar_usuario(entrada: EntradaCadastroUsuario) -> JSONResponse:
 
         id_gerado = str(novo.data[0]["id"])
         logger.info(f"Usuário cadastrado — id={id_gerado} | email={entrada.email}")
+
+        if entrada.consentimentos:
+            registros = [
+                {
+                    "usuario_id": id_gerado,
+                    "tipo": c.tipo,
+                    "aceito": c.aceito,
+                    "obrigatorio": c.obrigatorio,
+                    "texto_exibido": c.texto_exibido,
+                    "ip_address": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                }
+                for c in entrada.consentimentos
+            ]
+            supabase.table("consentimentos").insert(registros).execute()
+            logger.info(f"Consentimentos registrados — usuario_id={id_gerado} | total={len(registros)}")
 
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
