@@ -204,9 +204,19 @@ async def cadastrar_usuario(entrada: EntradaCadastroUsuario, request: Request) -
                 ]
                 supabase.table("consentimentos").insert(registros).execute()
                 logger.info(f"Consentimentos registrados — usuario_id={id_gerado} | total={len(registros)}")
-            except Exception:
+            except Exception as e:
                 logger.error(
                     f"Falha ao salvar consentimentos — usuario_id={id_gerado}\n{traceback.format_exc()}"
+                )
+                # temporário para debug — remover depois
+                return JSONResponse(
+                    status_code=status.HTTP_201_CREATED,
+                    content={
+                        "id": id_gerado,
+                        "mensagem": "Usuário criado",
+                        "debug_erro_consentimentos": str(e),
+                        "debug_traceback": traceback.format_exc(),
+                    },
                 )
 
         return JSONResponse(
