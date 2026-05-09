@@ -6,11 +6,9 @@ import asyncio
 import hashlib
 import re
 import secrets
-import smtplib
+import resend
 import traceback
 from datetime import datetime, timedelta, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -288,77 +286,33 @@ def _validar_nova_senha(senha: str) -> str | None:
 
 
 def _enviar_email_reset(email_destino: str, link: str) -> None:
-    """Envia e-mail de reset via SMTP (executar em thread separada)."""
-    texto_simples = (
-        f"Redefinição de senha — Carbono em Pé\n\n"
-        f"Recebemos uma solicitação para redefinir a senha da sua conta.\n"
-        f"Acesse o link abaixo para criar uma nova senha:\n\n"
-        f"{link}\n\n"
-        f"⏱ Este link expira em 15 minutos.\n"
-        f"Se você não solicitou, ignore este e-mail — sua senha permanece a mesma.\n\n"
-        f"Meridiano Tecnologia"
-    )
-
-    html = f"""\
-<!DOCTYPE html>
-<html lang="pt-BR">
-<body style="margin:0;padding:0;background:#0d1f0f;font-family:Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0">
-    <tr>
-      <td align="center" style="padding:40px 20px;">
-        <table width="480" cellpadding="0" cellspacing="0"
-          style="background:#132a16;border:1px solid #1e4024;border-radius:16px;overflow:hidden;max-width:480px;">
-          <tr>
-            <td style="padding:28px 36px;border-bottom:1px solid #1e4024;">
-              <span style="font-size:18px;font-weight:700;color:#4caf72;">🌱 Carbono em Pé</span>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:32px 36px;">
-              <h1 style="margin:0 0 12px;font-size:22px;font-weight:700;color:#e8f5ed;letter-spacing:-0.02em;">
-                Redefinição de senha
-              </h1>
-              <p style="margin:0 0 24px;font-size:14px;color:#86a98c;line-height:1.7;">
-                Recebemos uma solicitação para redefinir a senha da sua conta.
-                Clique no botão abaixo para criar uma nova senha.
-              </p>
-              <a href="{link}"
-                style="display:inline-block;padding:14px 28px;background:#4caf72;color:#ffffff;
-                       text-decoration:none;border-radius:12px;font-weight:700;font-size:14px;">
-                Redefinir minha senha →
-              </a>
-              <p style="margin:28px 0 0;font-size:12px;color:#86a98c;line-height:1.7;">
-                ⏱ Este link expira em <strong style="color:#e8f5ed;">15 minutos</strong>.<br>
-                Se você não solicitou a redefinição de senha, ignore este e-mail —
-                sua senha permanece a mesma e nenhuma ação é necessária.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:20px 36px;border-top:1px solid #1e4024;">
-              <p style="margin:0;font-size:11px;color:#86a98c;line-height:1.6;">
-                Meridiano Tecnologia · CNPJ 66.298.885/0001-65<br>
-                Rua País Leme, 215, Conj. 1713, Pinheiros, São Paulo/SP, CEP 05.424-150
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Redefinição de senha — Carbono em Pé"
-    msg["From"]    = settings.SMTP_USER
-    msg["To"]      = email_destino
-    msg.attach(MIMEText(texto_simples, "plain", "utf-8"))
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    with smtplib.SMTP_SSL(settings.SMTP_HOST, 465) as srv:
-        srv.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        srv.sendmail(settings.SMTP_USER, email_destino, msg.as_string())
+    """Envia e-mail de reset via Resend API."""
+    resend.api_key = settings.RESEND_API_KEY
+    resend.Emails.send({
+        "from": "Carbono em Pé <noreply@meridianotecnologia.com.br>",
+        "to": [email_destino],
+        "subject": "Redefinição de senha — Carbono em Pé",
+        "html": f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #1a7c3e;">Redefinição de senha</h2>
+            <p>Você solicitou a redefinição da sua senha no Carbono em Pé.</p>
+            <p>Clique no botão abaixo para criar uma nova senha:</p>
+            <a href="{link}" style="display: inline-block; background-color: #1a7c3e; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 16px 0;">
+                Redefinir senha
+            </a>
+            <p style="color: #666; font-size: 14px;">Este link expira em 15 minutos.</p>
+            <p style="color: #666; font-size: 14px;">Se você não solicitou a redefinição, ignore este e-mail.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+            <p style="color: #999; font-size: 12px;">Carbono em Pé — Meridiano Tecnologia</p>
+        </div>
+        """,
+        "text": (
+            f"Redefinição de senha — Carbono em Pé\n\n"
+            f"Acesse o link para redefinir sua senha:\n{link}\n\n"
+            f"Este link expira em 15 minutos.\n\n"
+            f"Se você não solicitou, ignore este e-mail."
+        ),
+    })
 
 
 @roteador.post(

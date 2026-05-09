@@ -53,10 +53,7 @@ class Settings(BaseSettings):
     NFEIO_COMPANY_ID: str
 
     # E-mail
-    SMTP_HOST: str
-    SMTP_PORT: int = 587
-    SMTP_USER: str
-    SMTP_PASSWORD: str
+    RESEND_API_KEY: str = ""
 
     class Config:
         env_file = ".env"
