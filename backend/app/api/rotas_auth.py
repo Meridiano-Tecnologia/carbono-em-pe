@@ -356,9 +356,7 @@ def _enviar_email_reset(email_destino: str, link: str) -> None:
     msg.attach(MIMEText(texto_simples, "plain", "utf-8"))
     msg.attach(MIMEText(html, "html", "utf-8"))
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as srv:
-        srv.ehlo()
-        srv.starttls()
+    with smtplib.SMTP_SSL(settings.SMTP_HOST, 465) as srv:
         srv.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         srv.sendmail(settings.SMTP_USER, email_destino, msg.as_string())
 
@@ -397,11 +395,23 @@ async def esqueci_senha(entrada: EntradaEsqueciSenha) -> JSONResponse:
             frontend_url = settings.origens_permitidas[0].rstrip("/")
             link = f"{frontend_url}/redefinir-senha?token={token}"
 
+            smtp_resultado = None
+            smtp_erro      = None
             try:
                 await asyncio.to_thread(_enviar_email_reset, usuario["email"], link)
                 logger.info(f"E-mail de reset enviado | usuario_id={usuario['id']}")
+                smtp_resultado = "sucesso"
             except Exception:
-                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{traceback.format_exc()}")
+                smtp_erro = traceback.format_exc()
+                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{smtp_erro}")
+                smtp_resultado = "erro"
+
+            # temporário para debug — remover depois
+            return JSONResponse(status_code=200, content={
+                **_RESPOSTA_ESQUECI,
+                "smtp_resultado": smtp_resultado,
+                "smtp_erro": smtp_erro,
+            })
 
     except Exception:
         logger.error(f"Erro inesperado em esqueci-senha | email={entrada.email}\n{traceback.format_exc()}")
