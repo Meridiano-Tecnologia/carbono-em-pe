@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from loguru import logger
+from app.core.config import settings
 from app.core.database import supabase
 from app.core.security import (
     verificar_senha,
@@ -373,9 +374,7 @@ async def esqueci_senha(entrada: EntradaEsqueciSenha) -> JSONResponse:
     `usuarios` e envia e-mail com link de redefinição.
     Sempre retorna 200 para não revelar se o e-mail está cadastrado.
     """
-    debug: dict = {}
     try:
-        print("1 - buscando usuário")
         resultado = (
             supabase.table("usuarios")
             .select("id, email")
@@ -383,51 +382,31 @@ async def esqueci_senha(entrada: EntradaEsqueciSenha) -> JSONResponse:
             .limit(1)
             .execute()
         )
-        debug["1_usuario_encontrado"] = bool(resultado.data)
 
         if resultado.data:
-            usuario = resultado.data[0]
-
-            print("2 - gerando token")
+            usuario    = resultado.data[0]
             token      = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             expira_em  = datetime.now(timezone.utc) + timedelta(minutes=15)
-            debug["2_token_gerado"] = True
 
-            print("3 - salvando token no banco")
-            update_resp = supabase.table("usuarios").update({
+            supabase.table("usuarios").update({
                 "reset_token_hash":   token_hash,
                 "reset_token_expira": expira_em.isoformat(),
             }).eq("id", usuario["id"]).execute()
-            debug["3_token_salvo"] = bool(update_resp.data)
 
             frontend_url = settings.origens_permitidas[0].rstrip("/")
             link = f"{frontend_url}/redefinir-senha?token={token}"
-            debug["3_link"] = link
 
-            print("4 - enviando email")
             try:
                 await asyncio.to_thread(_enviar_email_reset, usuario["email"], link)
-                print("5 - email enviado com sucesso")
                 logger.info(f"E-mail de reset enviado | usuario_id={usuario['id']}")
-                debug["4_smtp"] = "sucesso"
-            except Exception as e:
-                erro_smtp = traceback.format_exc()
-                print(f"ERRO SMTP: {erro_smtp}")
-                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{erro_smtp}")
-                debug["4_smtp"] = "erro"
-                debug["debug_smtp_erro"] = str(e)
-                debug["debug_traceback"] = erro_smtp
+            except Exception:
+                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{traceback.format_exc()}")
 
-    except Exception as e:
-        erro_geral = traceback.format_exc()
-        print(f"ERRO GERAL: {erro_geral}")
-        logger.error(f"Erro inesperado em esqueci-senha | email={entrada.email}\n{erro_geral}")
-        debug["erro_geral"] = str(e)
-        debug["erro_geral_traceback"] = erro_geral
+    except Exception:
+        logger.error(f"Erro inesperado em esqueci-senha | email={entrada.email}\n{traceback.format_exc()}")
 
-    # temporário para debug — remover depois
-    return JSONResponse(content={**_RESPOSTA_ESQUECI, **debug})
+    return JSONResponse(content=_RESPOSTA_ESQUECI)
 
 
 @roteador.post(
