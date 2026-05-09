@@ -395,23 +395,11 @@ async def esqueci_senha(entrada: EntradaEsqueciSenha) -> JSONResponse:
             frontend_url = settings.origens_permitidas[0].rstrip("/")
             link = f"{frontend_url}/redefinir-senha?token={token}"
 
-            smtp_resultado = None
-            smtp_erro      = None
             try:
                 await asyncio.to_thread(_enviar_email_reset, usuario["email"], link)
                 logger.info(f"E-mail de reset enviado | usuario_id={usuario['id']}")
-                smtp_resultado = "sucesso"
             except Exception:
-                smtp_erro = traceback.format_exc()
-                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{smtp_erro}")
-                smtp_resultado = "erro"
-
-            # temporário para debug — remover depois
-            return JSONResponse(status_code=200, content={
-                **_RESPOSTA_ESQUECI,
-                "smtp_resultado": smtp_resultado,
-                "smtp_erro": smtp_erro,
-            })
+                logger.error(f"Falha ao enviar e-mail de reset | usuario_id={usuario['id']}\n{traceback.format_exc()}")
 
     except Exception:
         logger.error(f"Erro inesperado em esqueci-senha | email={entrada.email}\n{traceback.format_exc()}")
