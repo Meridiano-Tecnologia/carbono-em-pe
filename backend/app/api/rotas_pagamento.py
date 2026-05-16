@@ -264,6 +264,7 @@ async def webhook_stripe(request: Request) -> JSONResponse:
         session_id = sessao.get("id")
         metadados = sessao.get("metadata", {})
         analise_id = metadados.get("analise_id")
+        camada = metadados.get("camada", "1")
 
         try:
             supabase.table("pagamentos").update({
@@ -271,10 +272,14 @@ async def webhook_stripe(request: Request) -> JSONResponse:
             }).eq("stripe_session_id", session_id).execute()
 
             logger.info(
-                f"Pagamento confirmado via webhook | session_id={session_id} | analise_id={analise_id}"
+                f"Pagamento confirmado via webhook | session_id={session_id} "
+                f"| analise_id={analise_id} | camada={camada}"
             )
 
-            await _disparar_geracao_relatorio(analise_id)
+            if camada == "2":
+                await _disparar_calculo_camada2(analise_id, session_id)
+            else:
+                await _disparar_geracao_relatorio(analise_id)
 
         except Exception:
             # Retorna 200 mesmo em falha interna para evitar reenvios infinitos do Stripe
@@ -283,6 +288,150 @@ async def webhook_stripe(request: Request) -> JSONResponse:
             )
 
     return JSONResponse(content={"recebido": True})
+
+
+async def _disparar_calculo_camada2(analise_id: str | None, session_id: str) -> None:
+    """
+    Após pagamento de Camada 2 confirmado:
+    1. Busca o registro analise_id → obtém propriedade_id
+    2. Busca propriedades → parâmetros de vegetação
+    3. Roda cálculo alométrico (Chave et al. 2005) e pontuação de elegibilidade
+    4. Insere novo registro em analises com camada=2
+    5. Gera o PDF da nova análise
+
+    Parâmetros de elegibilidade não armazenados (presenca_reserva_legal,
+    app_regularizada, historico_desmatamento) usam defaults conservadores —
+    isso é registrado em log para futura revisão.
+    """
+    if not analise_id:
+        logger.warning(f"Calculo Camada 2: analise_id ausente | session_id={session_id}")
+        return
+
+    try:
+        # 1. Obtém propriedade_id a partir da análise de Camada 1
+        analise_resp = await asyncio.to_thread(
+            lambda: supabase.table("analises")
+            .select("propriedade_id")
+            .eq("id", analise_id)
+            .limit(1)
+            .execute()
+        )
+        if not analise_resp.data:
+            logger.error(
+                f"Calculo Camada 2: análise {analise_id} não encontrada | session_id={session_id}"
+            )
+            return
+
+        propriedade_id = analise_resp.data[0].get("propriedade_id")
+        if not propriedade_id:
+            logger.error(
+                f"Calculo Camada 2: propriedade_id ausente na análise {analise_id}"
+            )
+            return
+
+        # 2. Obtém parâmetros de vegetação da propriedade
+        prop_resp = await asyncio.to_thread(
+            lambda: supabase.table("propriedades")
+            .select("bioma, tipo_vegetacao, area_vegetacao_ha, idade_vegetacao_anos, area_total_ha")
+            .eq("id", str(propriedade_id))
+            .limit(1)
+            .execute()
+        )
+        if not prop_resp.data:
+            logger.error(
+                f"Calculo Camada 2: propriedade {propriedade_id} não encontrada | analise_id={analise_id}"
+            )
+            return
+
+        prop = prop_resp.data[0]
+
+        # 3. Cálculo alométrico e elegibilidade (importação local para evitar ciclo de import)
+        from app.api.rotas_estimativa_camada2 import (  # noqa: PLC0415
+            _calcular_biomassa_alometrica,
+            _calcular_elegibilidade,
+            Bioma,
+            TipoVegetacao,
+            HistoricoDesmatamento,
+            EntradaCamada2,
+            _FATOR_CARBONO,
+            _FATOR_CO2_EQUIVALENTE,
+        )
+
+        bioma      = Bioma(prop["bioma"])
+        tipo_veg   = TipoVegetacao(prop["tipo_vegetacao"])
+        area_ha    = float(prop["area_vegetacao_ha"])
+        idade      = int(prop["idade_vegetacao_anos"])
+        area_total = float(prop["area_total_ha"])
+
+        biomassa_aerea, biomassa_sub, _dap, aviso = _calcular_biomassa_alometrica(
+            bioma, tipo_veg, area_ha
+        )
+        biomassa_total_mg = (biomassa_aerea + biomassa_sub) * area_ha
+        co2_t = biomassa_total_mg * _FATOR_CARBONO * _FATOR_CO2_EQUIVALENTE
+
+        # presenca_reserva_legal / app_regularizada / historico_desmatamento não são
+        # armazenados em propriedades — usamos defaults conservadores
+        entrada_eleg = EntradaCamada2(
+            bioma=bioma,
+            tipo_vegetacao=tipo_veg,
+            area_hectares=area_ha,
+            idade_anos=idade,
+            presenca_reserva_legal=False,
+            app_regularizada=False,
+            historico_desmatamento=HistoricoDesmatamento.baixo,
+            tamanho_propriedade_ha=area_total,
+        )
+        elegibilidade = _calcular_elegibilidade(entrada_eleg)
+
+        logger.warning(
+            f"Calculo Camada 2 usou defaults conservadores para elegibilidade "
+            f"(RL/APP/desmatamento não armazenados) | propriedade_id={propriedade_id}"
+        )
+
+        # 4. Insere análise Camada 2
+        nova_analise = await asyncio.to_thread(
+            lambda: supabase.table("analises").insert({
+                "propriedade_id":    str(propriedade_id),
+                "camada":            2,
+                "status":            "concluido",
+                "tco2_estimado":     round(co2_t, 4),
+                "biomassa_tha":      round(biomassa_total_mg / area_ha, 4),
+                "score_adicionalidade": elegibilidade.adicionalidade.pontuacao,
+                "score_permanencia":    elegibilidade.permanencia.pontuacao,
+                "score_titularidade":   elegibilidade.titularidade.pontuacao,
+                "score_tamanho":        elegibilidade.tamanho.pontuacao,
+                "elegibilidade":        elegibilidade.classificacao,
+                "metodo_calculo":    "chave_2005",
+                "versao_algoritmo":  "1.0.0",
+            }).execute()
+        )
+
+        dados = nova_analise.data
+        if not dados:
+            logger.error(
+                f"Calculo Camada 2: insert em analises não retornou dados | propriedade_id={propriedade_id}"
+            )
+            return
+
+        novo_analise_id = str(dados[0]["id"])
+        if aviso:
+            logger.warning(f"Aviso no cálculo alométrico Camada 2 | {aviso}")
+
+        logger.info(
+            f"Análise Camada 2 criada via webhook | novo_analise_id={novo_analise_id} "
+            f"| analise_origem={analise_id} | propriedade_id={propriedade_id} "
+            f"| tco2={co2_t:.2f} | elegibilidade={elegibilidade.classificacao} "
+            f"| session_id={session_id}"
+        )
+
+        # 5. Gera PDF da nova análise Camada 2
+        await _disparar_geracao_relatorio(novo_analise_id)
+
+    except Exception:
+        logger.error(
+            f"Falha no cálculo Camada 2 | analise_id={analise_id} | session_id={session_id}\n"
+            f"{traceback.format_exc()}"
+        )
 
 
 async def _disparar_geracao_relatorio(analise_id: str | None) -> None:
