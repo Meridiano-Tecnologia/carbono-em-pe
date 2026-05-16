@@ -154,7 +154,8 @@ async def criar_sessao(
         url_base = settings.origens_permitidas[0].rstrip("/")
 
         sessao = stripe.checkout.Session.create(
-            payment_method_types=["card"],
+            payment_method_types=["card", "pix"],
+            payment_method_options={"pix": {"expires_after_seconds": 1800}},
             line_items=[{
                 "price_data": {
                     "currency": "brl",
