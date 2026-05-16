@@ -153,9 +153,12 @@ async def criar_sessao(
         # Camadas pagas — cria sessão Stripe
         url_base = settings.origens_permitidas[0].rstrip("/")
 
+        metodos = ["card", "pix"] if settings.STRIPE_PIX_ENABLED else ["card"]
+        opcoes_metodo = {"pix": {"expires_after_seconds": 1800}} if settings.STRIPE_PIX_ENABLED else {}
+
         sessao = stripe.checkout.Session.create(
-            payment_method_types=["card", "pix"],
-            payment_method_options={"pix": {"expires_after_seconds": 1800}},
+            payment_method_types=metodos,
+            **({"payment_method_options": opcoes_metodo} if opcoes_metodo else {}),
             line_items=[{
                 "price_data": {
                     "currency": "brl",
@@ -204,7 +207,9 @@ async def criar_sessao(
 
     except stripe.StripeError as e:
         logger.error(
-            f"Erro Stripe ao criar sessão | analise_id={entrada.analise_id} | {e}"
+            f"Erro Stripe ao criar sessão | analise_id={entrada.analise_id} "
+            f"| http_status={e.http_status} | code={getattr(e, 'code', None)} "
+            f"| param={getattr(e, 'param', None)} | mensagem={e.user_message or str(e)}"
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

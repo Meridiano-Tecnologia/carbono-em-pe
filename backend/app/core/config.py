@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str
     STRIPE_WEBHOOK_SECRET: str
     STRIPE_PUBLISHABLE_KEY: str
+    STRIPE_PIX_ENABLED: bool = False  # Requer ativação explícita da conta no dashboard Stripe
 
     # Google Earth Engine
     GEE_SERVICE_ACCOUNT: str
