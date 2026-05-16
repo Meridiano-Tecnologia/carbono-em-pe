@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import api from '../services/api'
 
@@ -15,11 +15,24 @@ const C = {
 
 export default function PaginaEstimativa() {
   const [params] = useSearchParams()
-  const analiseId = params.get('analise_id')
+  const analiseIdParam = params.get('analise_id')
   const token = localStorage.getItem('carbono_token')
 
-  const [carregando, setCarregando] = useState(false)
-  const [erro, setErro]             = useState('')
+  const [analiseId, setAnaliseId]           = useState(analiseIdParam)
+  const [carregando, setCarregando]         = useState(false)
+  const [carregandoAnalise, setCarregandoAnalise] = useState(!analiseIdParam && !!token)
+  const [erro, setErro]                     = useState('')
+
+  useEffect(() => {
+    if (analiseIdParam || !token) return
+    api.get('/analises/minhas')
+      .then(({ data }) => {
+        const lista = Array.isArray(data) ? data : []
+        if (lista.length > 0) setAnaliseId(lista[0].id)
+      })
+      .catch(() => {})
+      .finally(() => setCarregandoAnalise(false))
+  }, [analiseIdParam, token])
 
   const avancar = async () => {
     if (!analiseId) return
@@ -107,7 +120,7 @@ export default function PaginaEstimativa() {
               propriedade.
             </p>
 
-            {!analiseId && (
+            {!carregandoAnalise && !analiseId && (
               <div
                 className="rounded-xl px-4 py-3 mb-4 text-sm"
                 style={{ background: C.erroFundo, color: C.erro, border: '1px solid #5c1a1a' }}
