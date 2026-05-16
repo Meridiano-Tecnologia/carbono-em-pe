@@ -357,11 +357,48 @@ async def _disparar_calculo_camada2(analise_id: str | None, session_id: str) -> 
             _FATOR_CO2_EQUIVALENTE,
         )
 
-        bioma      = Bioma(prop["bioma"])
-        tipo_veg   = TipoVegetacao(prop["tipo_vegetacao"])
-        area_ha    = float(prop["area_vegetacao_ha"])
-        idade      = int(prop["idade_vegetacao_anos"])
-        area_total = float(prop["area_total_ha"])
+        campos_ausentes = []
+
+        raw_bioma = prop.get("bioma")
+        if raw_bioma:
+            bioma = Bioma(raw_bioma)
+        else:
+            bioma = Bioma.cerrado
+            campos_ausentes.append("bioma")
+
+        raw_tipo_veg = prop.get("tipo_vegetacao")
+        if raw_tipo_veg:
+            tipo_veg = TipoVegetacao(raw_tipo_veg)
+        else:
+            tipo_veg = TipoVegetacao.floresta_secundaria
+            campos_ausentes.append("tipo_vegetacao")
+
+        raw_area = prop.get("area_vegetacao_ha")
+        if raw_area is not None:
+            area_ha = float(raw_area)
+        else:
+            area_ha = float(prop["area_total_ha"]) if prop.get("area_total_ha") is not None else 1.0
+            campos_ausentes.append("area_vegetacao_ha")
+
+        raw_idade = prop.get("idade_vegetacao_anos")
+        if raw_idade is not None:
+            idade = int(raw_idade)
+        else:
+            idade = 20
+            campos_ausentes.append("idade_vegetacao_anos")
+
+        raw_area_total = prop.get("area_total_ha")
+        if raw_area_total is not None:
+            area_total = float(raw_area_total)
+        else:
+            area_total = area_ha
+            campos_ausentes.append("area_total_ha")
+
+        if campos_ausentes:
+            logger.warning(
+                f"Calculo Camada 2: campos ausentes em propriedades — usando defaults conservadores "
+                f"| campos={campos_ausentes} | propriedade_id={propriedade_id}"
+            )
 
         biomassa_aerea, biomassa_sub, _dap, aviso = _calcular_biomassa_alometrica(
             bioma, tipo_veg, area_ha
